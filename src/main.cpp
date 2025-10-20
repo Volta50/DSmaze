@@ -1,93 +1,81 @@
 #include <SFML/Graphics.hpp>
-#include <vector>
-#include <iostream>
+#include "Grid.h"
+#include "MazeAlgorithm.h"
+#include "Menu.h"
 
-using namespace std;
+// include algorithm implementations
+#include "DFSAlgorithm.cpp"
+#include "PrimsAlgorithm.cpp"
 
-class Cell {
-public:
-    //creates an array of bools/bits that determines the state of each wall of the cell
-    // Up, Left, Right, Down
-    bool walls[4] = {1, 1, 1, 1};
-    Cell() {}
-};
+#include <memory>
+#include <string>
 
-class Grid {
-public:
-    int width;
-    int height;
-    vector<vector<Cell>> grid;
-
-    Grid(int widthLL, int heightLL) {
-        width = widthLL;
-        height = heightLL;
-        grid.resize(height, vector<Cell>(width));
-    }
-
-    bool removeWall(int row, int column, short wall) {
-        //clearing impossible cases
-        if (row < 0 || column < 0 || row >= height || column >= width) return false;
-        //checks if the required direction is a wall
-        if (wall == 0 && row == 0) return false;
-        if (wall == 1 && column == 0) return false;
-        if (wall == 2 && column == width - 1) return false;
-        if (wall == 3 && row == height - 1) return false;
-
-        //eliminates the wall of the desired cell
-        grid[row][column].walls[wall] = false;
-
-        //disables the wall of the neighbor cell to be connected according to the wall short provided
-        if (wall == 0) grid[row - 1][column].walls[3] = false;
-        else if (wall == 1) grid[row][column - 1].walls[2] = false;
-        else if (wall == 2) grid[row][column + 1].walls[1] = false;
-        else if (wall == 3) grid[row + 1][column].walls[0] = false;
-
-        return true;
-    }
-};
-
-
-//SMFL graphic implementation
-// Renders the provided grid in a blocking window loop (SFML 3-compatible).
-void showMaze(Grid &grid, int cellSize, const std::string &title = "SFML Maze Grid") {
-    unsigned int winW = static_cast<unsigned int>(grid.width * cellSize);
-    unsigned int winH = static_cast<unsigned int>(grid.height * cellSize);
-
+// simple renderer & animation loop
+void runAlgorithm(Grid &grid, MazeAlgorithm &algo, int cellSize, const std::string &title, sf::Font *fontPtr = nullptr) {
+    unsigned int winW = static_cast<unsigned int>(grid.width() * cellSize);
+    unsigned int winH = static_cast<unsigned int>(grid.height() * cellSize);
     sf::RenderWindow window(sf::VideoMode(sf::Vector2u(winW, winH)), title);
+    window.setFramerateLimit(60);
 
-    auto drawLine = [&](float x1, float y1, float x2, float y2, const sf::Color &col) {
-        // sf::Vertex is aggregate in SFML3 — set fields manually
+    sf::Clock clock;
+    sf::Time accumulator = sf::Time::Zero;
+    sf::Time stepTime = sf::milliseconds(8);
+
+    auto drawLine = [&](sf::RenderTarget &target, float x1, float y1, float x2, float y2, const sf::Color &col) {
         sf::Vertex verts[2];
         verts[0].position = sf::Vector2f(x1, y1);
-        verts[0].color    = col;
+        verts[0].color = col;
         verts[1].position = sf::Vector2f(x2, y2);
-        verts[1].color    = col;
-        window.draw(verts, 2, sf::PrimitiveType::Lines);
+        verts[1].color = col;
+        target.draw(verts, 2, sf::PrimitiveType::Lines);
     };
 
     while (window.isOpen()) {
-        // pollEvent returns std::optional<sf::Event> in SFML3
         while (auto evOpt = window.pollEvent()) {
             const sf::Event &ev = *evOpt;
-            if (ev.is<sf::Event::Closed>()) window.close();
+            if (ev.is<sf::Event::Closed>()) { window.close(); break; }
+        }
+
+        accumulator += clock.restart();
+        while (accumulator >= stepTime && !algo.finished()) {
+            algo.step();
+            accumulator -= stepTime;
         }
 
         window.clear(sf::Color::Black);
 
-        for (int y = 0; y < grid.height; ++y) {
-            for (int x = 0; x < grid.width; ++x) {
+        for (int y = 0; y < grid.height(); ++y) {
+            for (int x = 0; x < grid.width(); ++x) {
                 float xpos = x * cellSize;
                 float ypos = y * cellSize;
 
-                if (grid.grid[y][x].walls[0]) // Top
-                    drawLine(xpos, ypos, xpos + cellSize, ypos, sf::Color::White);
-                if (grid.grid[y][x].walls[1]) // Left
-                    drawLine(xpos, ypos, xpos, ypos + cellSize, sf::Color::White);
-                if (grid.grid[y][x].walls[2]) // Right
-                    drawLine(xpos + cellSize, ypos, xpos + cellSize, ypos + cellSize, sf::Color::White);
-                if (grid.grid[y][x].walls[3]) // Bottom
-                    drawLine(xpos, ypos + cellSize, xpos + cellSize, ypos + cellSize, sf::Color::White);
+                if (grid.at(x, y).visited) {
+                    sf::RectangleShape rect(sf::Vector2f(static_cast<float>(cellSize), static_cast<float>(cellSize)));
+                    rect.setPosition(sf::Vector2f(xpos, ypos));
+                    rect.setFillColor(sf::Color(60, 60, 60));
+                    window.draw(rect);
+                }
+
+                if (grid.at(x, y).walls[0]) drawLine(window, xpos, ypos, xpos + cellSize, ypos, sf::Color::White);
+                if (grid.at(x, y).walls[1]) drawLine(window, xpos, ypos, xpos, ypos + cellSize, sf::Color::White);
+                if (grid.at(x, y).walls[2]) drawLine(window, xpos + cellSize, ypos, xpos + cellSize, ypos + cellSize, sf::Color::White);
+                if (grid.at(x, y).walls[3]) drawLine(window, xpos, ypos + cellSize, xpos + cellSize, ypos + cellSize, sf::Color::White);
             }
+        }
+
+        Coord cur;
+        if (algo.getCurrent(cur)) {
+            sf::RectangleShape curRect(sf::Vector2f(static_cast<float>(cellSize), static_cast<float>(cellSize)));
+            curRect.setPosition(sf::Vector2f(static_cast<float>(cur.x * cellSize), static_cast<float>(cur.y * cellSize)));
+            curRect.setFillColor(sf::Color(0, 160, 0, 160));
+            window.draw(curRect);
+        }
+
+        if (fontPtr) {
+            sf::Text t(*fontPtr, title, 16);
+            t.setPosition(sf::Vector2f(4.f, 4.f));
+            t.setFillColor(sf::Color(200, 200, 200));
+            window.draw(t);
         }
 
         window.display();
@@ -95,24 +83,40 @@ void showMaze(Grid &grid, int cellSize, const std::string &title = "SFML Maze Gr
 }
 
 int main() {
-    // create a grid: Grid(width, height)
-    Grid grid(10, 10);
+    const int GRID_W = 40;
+    const int GRID_H = 28;
+    const int CELL_SIZE = 20;
 
-    // sample wall removals to demonstrate
-    // grid.removeWall(0, 0, 2);
-    // grid.removeWall(0, 1, 3);
-    // grid.removeWall(1, 1, 1);
+    sf::RenderWindow menuWindow(sf::VideoMode(sf::Vector2u(800, 600)), "Maze - Select Algorithm");
+    menuWindow.setFramerateLimit(60);
 
-    //diagonal test case for debugging
-    cout<<"pick a wall";
-    short wall;
-    cin>>wall;
-    
-    for(int i = 0; i<10;i++){
-        grid.removeWall(i,i,wall);
+    Menu menu;
+    int choice = menu.run(menuWindow);
+    if (choice < 0) return 0;
+
+    Grid grid(GRID_W, GRID_H);
+    std::srand(static_cast<unsigned>(std::time(nullptr)));
+
+    std::unique_ptr<MazeAlgorithm> algo;
+    std::string title;
+
+    switch (choice) {
+        case 0:
+            algo.reset(new DFSAlgorithm(grid));
+            title = "DFS (Recursive Backtracker)";
+            break;
+        case 1:
+            algo.reset(new PrimsAlgorithm(grid));
+            title = "Prim's (incremental)";
+            break;
+        default:
+            algo.reset(new DFSAlgorithm(grid));
+            title = "Fallback: DFS";
+            break;
     }
-    // show the maze in a window, cell size 40px
-    showMaze(grid, 40, "SFML 3 Maze");
+
+    sf::Font *fontPtr = menu.fontLoaded ? &menu.font : nullptr;
+    runAlgorithm(grid, *algo, CELL_SIZE, title, fontPtr);
 
     return 0;
 }
